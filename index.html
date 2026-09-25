@@ -1,0 +1,1307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CyberRange — Amber Terminal</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.7.2/socket.io.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=VT323&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg-void: #0a0700;
+    --bg-panel: #120d05;
+    --bg-surface: #1a1408;
+    --bg-raised: #241c0c;
+    --border-dim: rgba(255,176,0,0.18);
+    --border-glow: rgba(255,176,0,0.35);
+    --border-hot: rgba(255,176,0,0.6);
+    --cyan: #ffb000;
+    --cyan-dim: rgba(255,176,0,0.6);
+    --magenta: #ffb000;
+    --magenta-dim: rgba(255,176,0,0.6);
+    --red: #e2482c;
+    --red-dim: rgba(226,72,44,0.7);
+    --red-bg: rgba(226,72,44,0.08);
+    --green: #5fd75f;
+    --green-dim: rgba(95,215,95,0.7);
+    --green-bg: rgba(95,215,95,0.08);
+    --amber: #cc7a00;
+    --amber-bg: rgba(204,122,0,0.12);
+    --white: #f3c98a;
+    --muted: #7a5c2e;
+    --radius: 3px;
+    --font-hud: 'VT323', monospace;
+    --font-data: 'IBM Plex Mono', monospace;
+    --font-ui: 'IBM Plex Mono', monospace;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg-void);
+    color: var(--white);
+    font-family: var(--font-ui);
+    min-height: 100vh;
+    overflow-x: hidden;
+    background-image:
+      radial-gradient(ellipse 120% 90% at 50% 50%, transparent 55%, rgba(0,0,0,0.55) 100%),
+      linear-gradient(180deg, #0d0900 0%, #0a0700 100%);
+  }
+
+  /* ── SCANLINE OVERLAY ── */
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2px,
+      rgba(0,0,0,0.06) 2px,
+      rgba(0,0,0,0.06) 4px
+    );
+    pointer-events: none;
+    z-index: 1000;
+  }
+
+  /* ── HEADER ── */
+  .hud-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 22px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: var(--radius);
+    margin: 10px 10px 0;
+    position: sticky;
+    top: 10px;
+    z-index: 100;
+  }
+
+  .logo {
+    font-family: var(--font-hud);
+    font-size: 22px;
+    font-weight: 400;
+    letter-spacing: 2px;
+    color: var(--white);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .logo .omarchy-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border: 1px solid var(--cyan);
+    border-radius: 2px;
+    color: var(--cyan);
+    font-size: 12px;
+    font-family: var(--font-data);
+    font-weight: 700;
+  }
+  .logo .prompt { color: var(--cyan); }
+  .logo span { color: var(--cyan); }
+  .logo .cursor {
+    width: 9px; height: 18px;
+    background: var(--cyan);
+    display: inline-block;
+    animation: blink 1s steps(1) infinite;
+  }
+  @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+  .header-stats {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+  }
+
+  .header-stat {
+    text-align: center;
+  }
+  .header-stat .label {
+    font-family: var(--font-data);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  .header-stat .value {
+    font-family: var(--font-hud);
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 2px;
+  }
+  .header-stat.round .value { color: var(--amber); }
+  .header-stat.timer .value { color: var(--cyan); }
+
+  .status-pill {
+    font-family: var(--font-data);
+    font-size: 11px;
+    padding: 5px 14px;
+    border-radius: 20px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border: 1px solid currentColor;
+  }
+  .status-pill.active { color: var(--green); background: var(--green-bg); }
+  .status-pill.red_wins { color: var(--red); background: var(--red-bg); animation: flashRed 0.8s infinite; }
+  .status-pill.paused { color: var(--amber); background: var(--amber-bg); }
+
+  @keyframes flashRed {
+    0%, 100% { opacity: 1; } 50% { opacity: 0.4; }
+  }
+
+  /* ── MAIN GRID ── */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 280px 1fr 280px;
+    grid-template-rows: auto 1fr;
+    gap: 10px;
+    height: calc(100vh - 96px);
+    padding: 0 10px 10px;
+  }
+
+  /* ── PANELS ── */
+  .panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: var(--radius);
+    padding: 16px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .panel-title {
+    font-family: var(--font-data);
+    font-size: 13px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    text-transform: uppercase;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-dim);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .panel-title::before {
+    content: '';
+    display: block;
+    width: 6px;
+    height: 6px;
+    background: var(--magenta);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; } 50% { opacity: 0.3; }
+  }
+
+  /* ── HEALTH BAR ── */
+  .health-section {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: var(--radius);
+    margin: 10px 10px 0;
+    padding: 14px 24px;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+  }
+
+  .health-label {
+    font-family: var(--font-data);
+    font-size: 13px;
+    letter-spacing: 3px;
+    color: var(--muted);
+    white-space: nowrap;
+    min-width: 120px;
+  }
+
+  .health-bar-wrap {
+    flex: 1;
+    height: 26px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border-glow);
+    border-radius: 2px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .health-bar-fill {
+    height: 100%;
+    transition: width 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+                background-color 0.6s ease;
+    position: relative;
+  }
+  .health-bar-fill::after {
+    content: '';
+    position: absolute;
+    right: 0;
+    top: 0;
+    bottom: 0;
+    width: 2px;
+    background: rgba(0,0,0,0.4);
+  }
+
+  .health-bar-fill.hp-high { background: linear-gradient(90deg, #4a3a00 0%, var(--green) 100%); }
+  .health-bar-fill.hp-med { background: linear-gradient(90deg, #4a2e00 0%, var(--amber) 100%); }
+  .health-bar-fill.hp-low { background: linear-gradient(90deg, #880000 0%, var(--red) 100%); animation: flickerHP 0.5s infinite; }
+
+  @keyframes flickerHP {
+    0%, 100% { opacity: 1; } 50% { opacity: 0.7; }
+  }
+
+  /* ── ANALYTICS PANEL (inside center column) ── */
+  .analytics-panel {
+    background: var(--bg-panel);
+    padding: 16px;
+    flex: 0 0 auto;
+  }
+
+  .analytics-inner {
+    display: flex;
+    align-items: stretch;
+    gap: 14px;
+    margin-top: 10px;
+  }
+
+  .analytics-meta {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    min-width: 110px;
+  }
+
+  .analytics-kpis {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 14px;
+  }
+
+  .kpi {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+  .kpi-label {
+    font-family: var(--font-data);
+    font-size: 8px;
+    letter-spacing: 1.5px;
+    color: var(--muted);
+    text-transform: uppercase;
+  }
+  .kpi-val {
+    font-family: var(--font-data);
+    font-size: 13px;
+    font-weight: 700;
+    line-height: 1;
+  }
+  .kpi-peak  .kpi-val { color: var(--green); }
+  .kpi-low   .kpi-val { color: var(--red); }
+  .kpi-trend .kpi-val { color: var(--amber); }
+  .kpi-delta .kpi-val { color: var(--white); }
+
+  .analytics-chart-wrap {
+    flex: 1;
+    position: relative;
+    height: 160px;
+    background: var(--bg-void);
+    border: 1px solid var(--border-dim);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  /* flash tint on attack/defense */
+  .analytics-chart-wrap::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.08s;
+    border-radius: 2px;
+  }
+  .analytics-chart-wrap.flash-red::after {
+    background: rgba(255,42,109,0.10);
+    opacity: 1;
+  }
+  .analytics-chart-wrap.flash-green::after {
+    background: rgba(0,255,163,0.08);
+    opacity: 1;
+  }
+
+  #hpSparklineSvg {
+    width: 100%;
+    height: 100%;
+    display: block;
+  }
+
+  @keyframes segDraw {
+    from { stroke-dashoffset: var(--seg-len); }
+    to   { stroke-dashoffset: 0; }
+  }
+  @keyframes dotPop {
+    0%   { r: 0; opacity: 1; }
+    60%  { r: 5; opacity: 0.8; }
+    100% { r: 3; opacity: 0.85; }
+  }
+  @keyframes lastDotPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.25; }
+  }
+
+  .health-ticks {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    display: flex;
+    pointer-events: none;
+  }
+  .health-ticks span {
+    flex: 1;
+    border-right: 1px solid rgba(0,0,0,0.3);
+  }
+
+  .health-value {
+    font-family: var(--font-hud);
+    font-size: 34px;
+    font-weight: 700;
+    min-width: 80px;
+    text-align: right;
+  }
+
+  /* ── SCORE CARDS ── */
+  .score-card {
+    border: 1px solid var(--border-dim);
+    border-radius: 2px;
+    padding: 14px;
+    background: var(--bg-surface);
+  }
+  .score-card.red-card { border-color: rgba(255,42,109,0.2); background: rgba(255,42,109,0.04); }
+  .score-card.blue-card { border-color: rgba(255,176,0,0.2); background: rgba(255,176,0,0.04); }
+
+  .score-card .team-label {
+    font-family: var(--font-data);
+    font-size: 10px;
+    letter-spacing: 3px;
+    margin-bottom: 8px;
+  }
+  .red-card .team-label { color: var(--red); }
+  .blue-card .team-label { color: var(--cyan); }
+
+  .score-card .score-num {
+    font-family: var(--font-hud);
+    font-size: 52px;
+    font-weight: 900;
+    line-height: 1;
+  }
+  .red-card .score-num { color: var(--red); }
+  .blue-card .score-num { color: var(--cyan); }
+
+  .score-card .score-sub {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 4px;
+    font-family: var(--font-data);
+  }
+
+  /* ── ATTACK BUTTONS ── */
+  .btn-group { display: flex; flex-direction: column; gap: 6px; }
+
+  .btn-action {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-dim);
+    border-radius: 2px;
+    background: transparent;
+    cursor: pointer;
+    font-family: var(--font-ui);
+    font-size: 13px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    color: var(--white);
+    transition: all 0.15s;
+    text-align: left;
+    width: 100%;
+  }
+  .btn-action:hover {
+    transform: translateX(2px);
+  }
+  .btn-action:active { transform: scale(0.98); }
+
+  .btn-action.red { border-color: rgba(255,42,109,0.3); }
+  .btn-action.red:hover {
+    background: rgba(255,42,109,0.12);
+    border-color: var(--red);
+  }
+  .btn-action.blue { border-color: rgba(255,176,0,0.3); }
+  .btn-action.blue:hover {
+    background: rgba(255,176,0,0.08);
+    border-color: var(--cyan);
+  }
+
+  .btn-badge {
+    font-family: var(--font-data);
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 2px;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  .btn-badge.red-badge { background: var(--red-bg); color: var(--red); border: 1px solid rgba(255,42,109,0.3); }
+  .btn-badge.blue-badge { background: rgba(255,176,0,0.1); color: var(--cyan); border: 1px solid rgba(255,176,0,0.3); }
+
+  .btn-icon {
+    font-size: 14px;
+    width: 20px;
+    text-align: center;
+  }
+
+  /* ── CENTER PANEL ── */
+  .center-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+
+  .center-panel > * {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-dim);
+    border-radius: var(--radius);
+  }
+
+  /* ── MINIMAP ── */
+  .minimap-panel {
+    padding: 16px;
+    flex: 0 0 auto;
+  }
+
+  .minimap {
+    position: relative;
+    height: 180px;
+    background: var(--bg-void);
+    border: 1px solid var(--border-glow);
+    border-radius: 2px;
+    overflow: hidden;
+  }
+
+  .minimap-grid {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background-image:
+      linear-gradient(rgba(255,176,0,0.04) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,176,0,0.04) 1px, transparent 1px);
+    background-size: 30px 30px;
+  }
+
+  .map-node {
+    position: absolute;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    transform: translate(-50%, -50%);
+  }
+
+  .map-node .node-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    border: 2px solid currentColor;
+    position: relative;
+  }
+  .map-node .node-icon::after {
+    content: '';
+    position: absolute;
+    width: 32px; height: 32px;
+    border-radius: 50%;
+    border: 1px solid currentColor;
+    animation: sonar 2s infinite;
+    opacity: 0;
+  }
+  @keyframes sonar {
+    0% { transform: scale(1); opacity: 0.6; }
+    100% { transform: scale(2.5); opacity: 0; }
+  }
+
+  .node-red { color: var(--red); background: rgba(255,42,109,0.1); }
+  .node-blue { color: var(--cyan); background: rgba(255,176,0,0.1); }
+  .node-victim { color: var(--amber); background: rgba(255,158,0,0.1); }
+
+  .map-node .node-label {
+    font-family: var(--font-data);
+    font-size: 9px;
+    letter-spacing: 1px;
+    opacity: 0.7;
+  }
+  .node-red .node-label { color: var(--red); }
+  .node-blue .node-label { color: var(--cyan); }
+  .node-victim .node-label { color: var(--amber); }
+
+  .map-line {
+    position: absolute;
+    height: 1px;
+    transform-origin: left center;
+    pointer-events: none;
+  }
+  .map-line.active {
+    animation: dataFlow 0.5s linear infinite;
+  }
+  @keyframes dataFlow {
+    0% { background: linear-gradient(90deg, var(--red) 0%, transparent 100%); }
+    100% { background: linear-gradient(90deg, transparent 0%, var(--red) 100%); }
+  }
+
+  /* ── EVENT LOG ── */
+  .event-log {
+    background: var(--bg-panel);
+    padding: 16px;
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .log-scroll {
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .log-scroll::-webkit-scrollbar { width: 4px; }
+  .log-scroll::-webkit-scrollbar-track { background: transparent; }
+  .log-scroll::-webkit-scrollbar-thumb { background: var(--border-glow); border-radius: 2px; }
+
+  .log-entry {
+    display: grid;
+    grid-template-columns: 70px 50px 1fr auto;
+    gap: 8px;
+    align-items: center;
+    padding: 7px 10px;
+    border-radius: 2px;
+    border-left: 3px solid transparent;
+    font-size: 12px;
+    font-family: var(--font-data);
+    background: var(--bg-surface);
+    animation: slideIn 0.3s ease;
+  }
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateX(-8px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+  .log-entry.red { border-left-color: var(--red); }
+  .log-entry.blue { border-left-color: var(--cyan); }
+
+  .log-time { color: var(--muted); font-size: 11px; }
+  .log-team { font-weight: bold; font-size: 10px; letter-spacing: 1px; }
+  .log-entry.red .log-team { color: var(--red); }
+  .log-entry.blue .log-team { color: var(--cyan); }
+  .log-action { color: var(--white); }
+  .log-delta { font-weight: bold; text-align: right; white-space: nowrap; }
+  .log-entry.red .log-delta { color: var(--red); }
+  .log-entry.blue .log-delta { color: var(--green); }
+
+  /* ── CONFIG PANEL ── */
+  .config-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .config-row label {
+    font-family: var(--font-data);
+    font-size: 10px;
+    color: var(--muted);
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .config-row input {
+    background: var(--bg-surface);
+    border: 1px solid var(--border-dim);
+    border-radius: 2px;
+    padding: 7px 10px;
+    color: var(--cyan);
+    font-family: var(--font-data);
+    font-size: 12px;
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+  }
+  .config-row input:focus {
+    border-color: var(--border-hot);
+  }
+
+  .btn-reset {
+    padding: 10px;
+    background: transparent;
+    border: 1px solid var(--border-glow);
+    border-radius: 2px;
+    color: var(--cyan);
+    font-family: var(--font-data);
+    font-size: 11px;
+    letter-spacing: 2px;
+    cursor: pointer;
+    transition: all 0.2s;
+    width: 100%;
+    margin-top: 4px;
+  }
+  .btn-reset:hover {
+    background: rgba(255,176,0,0.08);
+    border-color: var(--cyan);
+  }
+
+  /* ── FLASH OVERLAY ── */
+  .attack-flash {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 999;
+    opacity: 0;
+    transition: opacity 0.1s;
+  }
+  .attack-flash.red-flash { background: radial-gradient(ellipse at center, rgba(255,0,0,0.08) 0%, transparent 70%); }
+  .attack-flash.blue-flash { background: radial-gradient(ellipse at center, rgba(255,176,0,0.06) 0%, transparent 70%); }
+  .attack-flash.show { opacity: 1; }
+
+  /* ── WIN OVERLAY ── */
+  .win-overlay {
+    display: none;
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0,0,0,0.85);
+    z-index: 500;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .win-overlay.show { display: flex; }
+  .win-title {
+    font-family: var(--font-hud);
+    font-size: 60px;
+    font-weight: 900;
+    letter-spacing: 8px;
+    animation: glitch 0.3s infinite;
+  }
+  @keyframes glitch {
+    0%, 100% { text-shadow: -2px 0 var(--red), 2px 0 var(--cyan); }
+    33% { text-shadow: 2px 0 var(--red), -2px 0 var(--cyan); }
+    66% { text-shadow: 0 0 0; }
+  }
+  .win-title.red { color: var(--red); }
+  .win-title.blue { color: var(--cyan); }
+  .win-sub {
+    font-family: var(--font-data);
+    font-size: 16px;
+    color: var(--muted);
+    letter-spacing: 3px;
+  }
+
+  .spinner {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--green);
+    animation: pulse 1.5s infinite;
+    margin-right: 6px;
+  }
+
+  /* ── RESPONSIVE ── */
+  @media (max-width: 900px) {
+    .main-grid { grid-template-columns: 1fr; grid-template-rows: auto; height: auto; }
+    .health-section { flex-wrap: wrap; }
+  }
+</style>
+</head>
+<body>
+
+<!-- FLASH OVERLAYS -->
+<div class="attack-flash red-flash" id="redFlash"></div>
+<div class="attack-flash blue-flash" id="blueFlash"></div>
+
+<!-- WIN OVERLAY -->
+<div class="win-overlay" id="winOverlay">
+  <div class="win-title" id="winTitle">RED WINS</div>
+  <div class="win-sub" id="winSub">SYSTEM COMPROMISED</div>
+  <button class="btn-reset" onclick="resetGame()" style="width:200px; font-size:13px;">NEW ROUND</button>
+</div>
+
+<!-- HEADER -->
+<header class="hud-header">
+  <div class="logo">
+    <span class="omarchy-glyph">#</span>
+    <span class="prompt">root@cyberrange</span>:<span>~$</span><span class="cursor"></span>
+  </div>
+  <div class="header-stats">
+    <div class="header-stat round">
+      <div class="label">Round</div>
+      <div class="value" id="roundNum">01</div>
+    </div>
+    <div class="header-stat timer">
+      <div class="label">Elapsed</div>
+      <div class="value" id="timerDisplay">00:00</div>
+    </div>
+    <div class="status-pill active" id="statusPill">
+      <span class="spinner"></span>ACTIVE
+    </div>
+  </div>
+</header>
+
+<!-- HEALTH BAR ROW -->
+<div class="health-section">
+  <div class="health-label">SYSTEM HEALTH</div>
+  <div class="health-bar-wrap">
+    <div class="health-bar-fill hp-high" id="healthBar" style="width: 100%;">
+      <div class="health-ticks">
+        <span></span><span></span><span></span><span></span>
+        <span></span><span></span><span></span><span></span><span></span>
+      </div>
+    </div>
+  </div>
+  <div class="health-value" id="healthVal">100</div>
+</div>
+
+<!-- MAIN GRID -->
+<div class="main-grid">
+
+  <!-- LEFT: RED TEAM PANEL -->
+  <div class="panel">
+    <div class="panel-title">Red Team — Attacker</div>
+
+    <div class="score-card red-card">
+      <div class="team-label">RED SCORE</div>
+      <div class="score-num" id="redScore">0</div>
+      <div class="score-sub">DAMAGE DEALT</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn-action red" onclick="redAction('portscan')">
+        <span class="btn-icon">◈</span>
+        Port Scan (nmap)
+        <span class="btn-badge red-badge">−5 HP</span>
+      </button>
+      <button class="btn-action red" onclick="redAction('bruteforce')">
+        <span class="btn-icon">⚡</span>
+        SSH Brute Force (hydra)
+        <span class="btn-badge red-badge">−2/20 HP</span>
+      </button>
+      <button class="btn-action red" onclick="redAction('webapp')">
+        <span class="btn-icon">☠</span>
+        Web App Exploit (SQLi)
+        <span class="btn-badge red-badge">−10 HP</span>
+      </button>
+      <button class="btn-action red" onclick="redAction('privesc')">
+        <span class="btn-icon">▲</span>
+        Privilege Escalation
+        <span class="btn-badge red-badge">−15 HP</span>
+      </button>
+      <button class="btn-action red" onclick="redAction('dos')">
+        <span class="btn-icon">◉</span>
+        Denial of Service
+        <span class="btn-badge red-badge">−8 HP</span>
+      </button>
+    </div>
+
+    <div class="config-row">
+      <label>Victim Target IP</label>
+      <input type="text" id="victimIpInput" value="192.168.1.100" placeholder="192.168.1.100">
+    </div>
+  </div>
+
+  <!-- CENTER: MAP + LOG -->
+  <div class="center-panel">
+    <!-- ANALYTICS PANEL -->
+    <div class="analytics-panel">
+      <div class="panel-title">HP Analytics</div>
+      <div class="analytics-inner">
+        <div class="analytics-meta">
+          <div class="analytics-kpis">
+            <div class="kpi kpi-peak">
+              <span class="kpi-label">Peak</span>
+              <span class="kpi-val" id="statPeak">100</span>
+            </div>
+            <div class="kpi kpi-low">
+              <span class="kpi-label">Low</span>
+              <span class="kpi-val" id="statLow">100</span>
+            </div>
+            <div class="kpi kpi-trend">
+              <span class="kpi-label">Trend</span>
+              <span class="kpi-val" id="statTrend">—</span>
+            </div>
+            <div class="kpi kpi-delta">
+              <span class="kpi-label">Last Δ</span>
+              <span class="kpi-val" id="statDelta">0</span>
+            </div>
+          </div>
+        </div>
+        <div class="analytics-chart-wrap" id="analyticsWrap">
+          <svg id="hpSparklineSvg" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- MINIMAP -->
+    <div class="minimap-panel">
+      <div class="panel-title">Network Topology</div>
+      <div class="minimap">
+        <div class="minimap-grid"></div>
+        <!-- SVG lines -->
+        <svg id="mapLines" style="position:absolute;top:0;left:0;width:100%;height:100%;" xmlns="http://www.w3.org/2000/svg"></svg>
+        <!-- RED TEAM node -->
+        <div class="map-node" style="left:15%;top:50%">
+          <div class="node-icon node-red">⚡</div>
+          <div class="node-label node-red">RED · 192.168.1.10</div>
+        </div>
+        <!-- VICTIM node -->
+        <div class="map-node" style="left:50%;top:50%">
+          <div class="node-icon node-victim" id="victimNode">⬡</div>
+          <div class="node-label node-victim" id="victimNodeLabel">VICTIM · 192.168.1.100</div>
+        </div>
+        <!-- BLUE TEAM node -->
+        <div class="map-node" style="left:85%;top:50%">
+          <div class="node-icon node-blue">◈</div>
+          <div class="node-label node-blue">BLUE · 192.168.1.20</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- EVENT LOG -->
+    <div class="event-log">
+      <div class="panel-title">Live Event Feed</div>
+      <div class="log-scroll" id="eventLog">
+        <div class="log-entry blue" style="opacity:0.5;">
+          <span class="log-time">--:--:--</span>
+          <span class="log-team">SYS</span>
+          <span class="log-action">CyberRange initialized — waiting for activity…</span>
+          <span class="log-delta">—</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RIGHT: BLUE TEAM PANEL -->
+  <div class="panel">
+    <div class="panel-title">Blue Team — Defender</div>
+
+    <div class="score-card blue-card">
+      <div class="team-label">BLUE SCORE</div>
+      <div class="score-num" id="blueScore">0</div>
+      <div class="score-sub">DAMAGE MITIGATED</div>
+    </div>
+
+    <div class="btn-group">
+      <button class="btn-action blue" onclick="blueAction('detect')">
+        <span class="btn-icon">◉</span>
+        Detect Attack (IDS)
+        <span class="btn-badge blue-badge">+10 HP</span>
+      </button>
+      <button class="btn-action blue" onclick="blueAction('password_reset')">
+        <span class="btn-icon">⚿</span>
+        Reset Password (SSH)
+        <span class="btn-badge blue-badge">+20 HP</span>
+      </button>
+      <button class="btn-action blue" onclick="blueAction('block_ip')">
+        <span class="btn-icon">⊘</span>
+        Block IP (iptables)
+        <span class="btn-badge blue-badge">+15 HP</span>
+      </button>
+      <button class="btn-action blue" onclick="blueAction('patch')">
+        <span class="btn-icon">⬡</span>
+        Apply Security Patch
+        <span class="btn-badge blue-badge">+20 HP</span>
+      </button>
+      <button class="btn-action blue" onclick="blueAction('honeypot')">
+        <span class="btn-icon">◈</span>
+        Deploy Honeypot
+        <span class="btn-badge blue-badge">+10 HP</span>
+      </button>
+    </div>
+
+    <div class="config-row">
+      <label>Attacker IP (for block)</label>
+      <input type="text" id="redIpInput" value="192.168.1.10" placeholder="192.168.1.10">
+    </div>
+
+    <button class="btn-reset" onclick="resetGame()">⟳ NEW ROUND</button>
+  </div>
+
+</div>
+
+<script>
+  const socket = io();
+  let lastElapsed = 0;
+  // hpHistory rebuilt from server data.events on every update — no client-side drift
+  let hpHistory = [{hp: 100, delta: 0, team: null}];
+  let lastRenderedEventId = null;
+
+  // ── SOCKET HANDLERS ──────────────────────────
+  socket.on("connect", () => {
+    socket.emit("request_state");
+  });
+
+  socket.on("game_update", (data) => {
+    updateHUD(data);
+    if (data.latest_event) {
+      flash(data.latest_event.team);
+      prependLog(data.latest_event);
+    }
+  });
+
+  // ── HUD UPDATE ────────────────────────────────
+  function updateHUD(data) {
+    const hp = Math.max(0, Math.min(100, data.health));
+    const bar = document.getElementById("healthBar");
+    const val = document.getElementById("healthVal");
+    bar.style.width = hp + "%";
+    val.textContent = hp;
+
+    bar.className = "health-bar-fill";
+    if (hp > 60) bar.classList.add("hp-high");
+    else if (hp > 25) bar.classList.add("hp-med");
+    else bar.classList.add("hp-low");
+
+    // ── Analytics: rebuild from server-authoritative events array ──
+    // data.events is newest-first (max 20); reverse → chronological for the chart.
+    // Prepend a baseline {hp:100} anchor so the line always starts at full health.
+    const serverEvents = Array.isArray(data.events) ? data.events : [];
+    const chrono = serverEvents.slice().reverse(); // oldest → newest
+    if (chrono.length === 0) {
+      hpHistory = [{hp: 100, delta: 0, team: null}];
+    } else {
+      // baseline anchor at round-start (100 HP), then one point per event
+      hpHistory = [
+        {hp: 100, delta: 0, team: null},
+        ...chrono.map(e => ({
+          hp:    Math.max(0, Math.min(100, e.health_after)),
+          delta: e.delta,
+          team:  e.team,
+        }))
+      ];
+    }
+
+    // flash chart only when a genuinely new event arrives
+    const latestId = data.latest_event ? data.latest_event.id : null;
+    if (latestId && latestId !== lastRenderedEventId) {
+      flashChart(data.latest_event.delta);
+      lastRenderedEventId = latestId;
+    }
+    drawSparkline();
+
+    document.getElementById("redScore").textContent = data.red_score;
+    document.getElementById("blueScore").textContent = data.blue_score;
+    document.getElementById("roundNum").textContent = String(data.round).padStart(2, "0");
+    lastElapsed = data.elapsed;
+
+    const pill = document.getElementById("statusPill");
+    pill.className = "status-pill " + data.status;
+    if (data.status === "active") pill.innerHTML = '<span class="spinner"></span>ACTIVE';
+    else if (data.status === "red_wins") pill.textContent = "BREACHED";
+    else pill.textContent = data.status.toUpperCase();
+
+    if (data.status === "red_wins") showWin("red");
+
+    const victimIpInput = document.getElementById("victimIpInput");
+    document.getElementById("victimNodeLabel").textContent = "VICTIM · " + (data.victim_ip || victimIpInput.value);
+  }
+
+  function showWin(team) {
+    const overlay = document.getElementById("winOverlay");
+    document.getElementById("winTitle").textContent = team.toUpperCase() + " WINS";
+    document.getElementById("winTitle").className = "win-title " + team;
+    document.getElementById("winSub").textContent = team === "red" ? "SYSTEM COMPROMISED" : "NETWORK SECURED";
+    overlay.classList.add("show");
+  }
+
+  // ── FLASH ─────────────────────────────────────
+  function flash(team) {
+    const el = document.getElementById(team === "red" ? "redFlash" : "blueFlash");
+    el.classList.add("show");
+    setTimeout(() => el.classList.remove("show"), 200);
+  }
+
+  // ── EVENT LOG ─────────────────────────────────
+  function prependLog(event) {
+    const log = document.getElementById("eventLog");
+    const div = document.createElement("div");
+    div.className = "log-entry " + event.team;
+    const sign = event.delta >= 0 ? "+" : "";
+    div.innerHTML = `
+      <span class="log-time">${event.timestamp}</span>
+      <span class="log-team">${event.team.toUpperCase()}</span>
+      <span class="log-action">${event.action}</span>
+      <span class="log-delta">${sign}${event.delta}</span>
+    `;
+    log.insertBefore(div, log.firstChild);
+    // keep max 30
+    while (log.children.length > 30) log.removeChild(log.lastChild);
+  }
+
+  // ── TIMER ─────────────────────────────────────
+  setInterval(() => {
+    lastElapsed++;
+    const m = Math.floor(lastElapsed / 60).toString().padStart(2, "0");
+    const s = (lastElapsed % 60).toString().padStart(2, "0");
+    document.getElementById("timerDisplay").textContent = m + ":" + s;
+  }, 1000);
+
+  // ── API ACTIONS ───────────────────────────────
+  async function redAction(type) {
+    const target = document.getElementById("victimIpInput").value || "192.168.1.100";
+    const endpoints = {
+      portscan: "/api/red/portscan",
+      bruteforce: "/api/red/bruteforce",
+      webapp: "/api/red/webapp",
+      privesc: "/api/red/privesc",
+      dos: "/api/red/dos",
+    };
+    try {
+      const res = await fetch(endpoints[type], {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({target, username: "testuser"}),
+      });
+      const data = await res.json();
+      if (data.raw) console.log("Tool output:", data.raw);
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  async function blueAction(type) {
+    const ip = document.getElementById("redIpInput").value || "192.168.1.10";
+    const endpoints = {
+      detect: "/api/blue/detect",
+      password_reset: "/api/blue/password_reset",
+      block_ip: "/api/blue/block_ip",
+      patch: "/api/blue/patch",
+      honeypot: "/api/blue/honeypot",
+    };
+    try {
+      await fetch(endpoints[type], {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ip}),
+      });
+    } catch(e) {
+      console.error(e);
+    }
+  }
+
+  async function resetGame() {
+    document.getElementById("winOverlay").classList.remove("show");
+    await fetch("/api/reset", {method: "POST"});
+  }
+
+  // ── ANALYTICS: FLASH CHART ────────────────────
+  function flashChart(delta) {
+    const wrap = document.getElementById('analyticsWrap');
+    if (!wrap) return;
+    const cls = delta < 0 ? 'flash-red' : 'flash-green';
+    wrap.classList.add(cls);
+    setTimeout(() => wrap.classList.remove(cls), 350);
+  }
+
+  // ── ANALYTICS: DRAW SPARKLINE (stock-market style) ──────────
+  function drawSparkline() {
+    const svg = document.getElementById('hpSparklineSvg');
+    if (!svg) return;
+
+    const W   = svg.clientWidth  || svg.getBoundingClientRect().width  || 500;
+    const H   = svg.clientHeight || svg.getBoundingClientRect().height || 160;
+    const PAD = {l: 30, r: 10, t: 8, b: 16};
+    const cW  = W - PAD.l - PAD.r;
+    const cH  = H - PAD.t - PAD.b;
+    const n   = hpHistory.length;
+    if (n === 0) return;
+
+    // ── Fixed Y-axis: always 0–100, labels at every 10 ──
+    const yMin = 0;
+    const yMax = 100;
+
+    const xOf = i  => n === 1 ? PAD.l + cW / 2 : PAD.l + (i / (n - 1)) * cW;
+    const yOf = hp => PAD.t + cH * (1 - (hp - yMin) / (yMax - yMin));
+
+    const pts = hpHistory.map((d, i) => ({x: xOf(i), y: yOf(d.hp), hp: d.hp, delta: d.delta}));
+
+    // ── Sharp straight-line path (stock chart aesthetic) ──
+    const fullPath = pts.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`).join(' ');
+
+    // ── Closed area path for fill ──
+    const areaPath = fullPath
+      + ` L ${pts[n-1].x.toFixed(1)} ${(H - PAD.b + 2).toFixed(1)}`
+      + ` L ${pts[0].x.toFixed(1)}   ${(H - PAD.b + 2).toFixed(1)} Z`;
+
+    // ── Color of the overall line by current HP ──
+    const currHp  = pts[n - 1].hp;
+    const lineCol = currHp > 60 ? '#00ffa3' : currHp > 25 ? '#ff9e00' : '#ff2a6d';
+    const glowCol = currHp > 60 ? 'rgba(0,255,163,0.4)'  : currHp > 25 ? 'rgba(255,158,0,0.4)'  : 'rgba(255,42,109,0.4)';
+    const areaTop = currHp > 60 ? 'rgba(0,255,163,0.15)' : currHp > 25 ? 'rgba(255,158,0,0.15)' : 'rgba(255,42,109,0.15)';
+
+    // ── Per-segment colored lines (red=drop, green=rise) ──
+    // This is the key stock-chart detail — each move is its own color
+    const segmentsEl = pts.slice(1).map((b, i) => {
+      const a      = pts[i];
+      const segCol = b.delta < 0 ? '#ff2a6d' : b.delta > 0 ? '#00ffa3' : 'rgba(200,180,140,0.4)';
+      const segLen = Math.hypot(b.x - a.x, b.y - a.y).toFixed(1);
+      const isLast = i === pts.length - 2;
+      return `<line
+        x1="${a.x.toFixed(1)}" y1="${a.y.toFixed(1)}"
+        x2="${b.x.toFixed(1)}" y2="${b.y.toFixed(1)}"
+        stroke="${segCol}" stroke-width="${isLast ? 2.5 : 1.8}" stroke-linecap="square"
+        style="${isLast
+          ? `stroke-dasharray:${segLen};stroke-dashoffset:${segLen};animation:segDraw 0.35s ease-out forwards;`
+          : `opacity:0.85;`
+        }"/>`;
+    }).join('');
+
+    // ── Vertical drop lines at each event (stock chart tick marks) ──
+    const ticksEl = pts.slice(1).map((p, i) => {
+      const col = p.delta < 0 ? 'rgba(255,42,109,0.2)' : 'rgba(0,255,163,0.18)';
+      return `<line x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}"
+                    x2="${p.x.toFixed(1)}" y2="${(H - PAD.b).toFixed(1)}"
+                    stroke="${col}" stroke-width="1" stroke-dasharray="2 3"/>`;
+    }).join('');
+
+    // ── Event dots ──
+    const dotsEl = pts.slice(1).map(p => {
+      const dc = p.delta < 0 ? '#ff2a6d' : '#00ffa3';
+      return `<circle cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.5"
+        fill="${dc}" stroke="rgba(0,0,0,0.6)" stroke-width="1"/>`;
+    }).join('');
+
+    // ── Directional arrow on last point ──
+    let arrowEl = '';
+    if (n >= 2) {
+      const lastDelta = pts[n - 1].delta;
+      if (lastDelta !== 0) {
+        const lx = pts[n - 1].x, ly = pts[n - 1].y;
+        const ac = lastDelta < 0 ? '#ff2a6d' : '#00ffa3';
+        arrowEl = lastDelta < 0
+          ? `<path d="M${(lx-5).toFixed(1)} ${(ly+7).toFixed(1)} L${lx.toFixed(1)} ${(ly+13).toFixed(1)} L${(lx+5).toFixed(1)} ${(ly+7).toFixed(1)}"
+               stroke="${ac}" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`
+          : `<path d="M${(lx-5).toFixed(1)} ${(ly-7).toFixed(1)} L${lx.toFixed(1)} ${(ly-13).toFixed(1)} L${(lx+5).toFixed(1)} ${(ly-7).toFixed(1)}"
+               stroke="${ac}" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`;
+      }
+    }
+
+    // ── Pulsing current-price dot ──
+    const lp = pts[n - 1];
+    const priceTag = `
+      <circle cx="${lp.x.toFixed(1)}" cy="${lp.y.toFixed(1)}" r="9"
+        fill="none" stroke="${lineCol}" stroke-width="1" opacity="0.2"
+        style="animation:lastDotPulse 1.2s infinite;"/>
+      <circle cx="${lp.x.toFixed(1)}" cy="${lp.y.toFixed(1)}" r="4"
+        fill="${lineCol}" stroke="rgba(0,0,0,0.7)" stroke-width="1.5"/>
+      <rect x="${(lp.x + 7).toFixed(1)}" y="${(lp.y - 9).toFixed(1)}"
+        width="26" height="15" rx="1"
+        fill="rgba(0,0,0,0.75)" stroke="${lineCol}" stroke-width="0.8"/>
+      <text x="${(lp.x + 20).toFixed(1)}" y="${(lp.y + 2).toFixed(1)}"
+        font-family="'VT323',monospace" font-size="12" font-weight="400"
+        fill="${lineCol}" text-anchor="middle">${Math.round(currHp)}</text>`;
+
+    // ── Y-axis labels at 10, 20, 30 … 100 ──
+    const yLabels = [10,20,30,40,50,60,70,80,90,100].map(v => {
+      return `<text x="${(PAD.l - 3).toFixed(1)}" y="${(yOf(v) + 3).toFixed(1)}"
+        font-family="'IBM Plex Mono',monospace" font-size="7"
+        fill="rgba(255,176,0,0.32)" text-anchor="end">${v}</text>
+      <line x1="${PAD.l}" y1="${yOf(v).toFixed(1)}" x2="${(W - PAD.r).toFixed(1)}" y2="${yOf(v).toFixed(1)}"
+        stroke="rgba(255,176,0,0.05)" stroke-width="1" stroke-dasharray="3 6"/>`;
+    }).join('');
+
+    // ── Bottom timestamp axis ──
+    const timeLabels = n > 1 ? [0, Math.floor((n-1)/2), n-1].map(i => {
+      const ts = hpHistory[i].team
+        ? (hpHistory[i].team === 'red' ? '▼' : '▲')
+        : '·';
+      return `<text x="${pts[i].x.toFixed(1)}" y="${(H - 3).toFixed(1)}"
+        font-family="'IBM Plex Mono',monospace" font-size="7"
+        fill="${hpHistory[i].team === 'red' ? 'rgba(255,42,109,0.4)' : hpHistory[i].team === 'blue' ? 'rgba(255,176,0,0.4)' : 'rgba(150,130,90,0.3)'}"
+        text-anchor="middle">${ts}</text>`;
+    }).join('') : '';
+
+    svg.innerHTML = `
+      <defs>
+        <linearGradient id="aG" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%"   stop-color="${areaTop}"/>
+          <stop offset="85%"  stop-color="rgba(0,0,0,0.02)"/>
+          <stop offset="100%" stop-color="rgba(0,0,0,0)"/>
+        </linearGradient>
+      </defs>
+
+      <!-- y-axis labels & grid -->
+      ${yLabels}
+
+      <!-- vertical tick lines -->
+      ${ticksEl}
+
+      <!-- area fill under curve -->
+      <path d="${areaPath}" fill="url(#aG)"/>
+
+      <!-- per-segment colored lines -->
+      ${segmentsEl}
+
+      <!-- event dots -->
+      ${dotsEl}
+
+      <!-- directional arrow -->
+      ${arrowEl}
+
+      <!-- live price tag -->
+      ${priceTag}
+
+      <!-- time axis markers -->
+      ${timeLabels}
+    `;
+
+    // ── update KPI badges ──
+    const hps       = hpHistory.map(d => d.hp);
+    const peak      = Math.max(...hps);
+    const low       = Math.min(...hps);
+    const lastDelta = n > 1 ? hpHistory[n - 1].delta : 0;
+
+    document.getElementById('statPeak').textContent = peak;
+    document.getElementById('statLow').textContent  = low;
+
+    const deltaEl = document.getElementById('statDelta');
+    deltaEl.textContent = (lastDelta >= 0 ? '+' : '') + lastDelta;
+    deltaEl.style.color = lastDelta > 0 ? 'var(--green)' : lastDelta < 0 ? 'var(--red)' : 'var(--white)';
+
+    const trendEl = document.getElementById('statTrend');
+    if (lastDelta > 0)      { trendEl.textContent = '↑ UP';   trendEl.style.color = 'var(--green)'; }
+    else if (lastDelta < 0) { trendEl.textContent = '↓ DOWN'; trendEl.style.color = 'var(--red)'; }
+    else                    { trendEl.textContent = '— FLAT'; trendEl.style.color = 'var(--amber)'; }
+  }
+
+  // initial draw so the strip isn't blank on load
+  window.addEventListener('load', () => drawSparkline());
+  window.addEventListener('resize', () => drawSparkline());
+
+  // ── DRAW MINIMAP LINES ────────────────────────
+  function drawMapLines() {
+    const svg = document.getElementById("mapLines");
+    svg.innerHTML = `
+      <line x1="15%" y1="50%" x2="50%" y2="50%"
+        stroke="rgba(255,42,109,0.25)" stroke-width="1.5"
+        stroke-dasharray="6 4"/>
+      <line x1="50%" y1="50%" x2="85%" y2="50%"
+        stroke="rgba(255,176,0,0.2)" stroke-width="1.5"
+        stroke-dasharray="6 4"/>
+    `;
+  }
+  drawMapLines();
+</script>
+</body>
+</html>
