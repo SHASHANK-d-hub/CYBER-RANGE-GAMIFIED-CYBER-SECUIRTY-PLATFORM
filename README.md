@@ -181,4 +181,4 @@ cyberrange/
 - **Add team authentication** → add JWT to API endpoints
 - **Multi-round tournament mode** → track wins per round in DB
   3301
-  paris
+  paris,china
